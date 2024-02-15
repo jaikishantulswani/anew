@@ -13,9 +13,11 @@ func main() {
 	var quietMode bool
 	var dryRun bool
 	var trim bool
+	var numLines int
 	flag.BoolVar(&quietMode, "q", false, "quiet mode (no output at all)")
 	flag.BoolVar(&dryRun, "d", false, "don't append anything to the file, just print the new lines to stdout")
 	flag.BoolVar(&trim, "t", false, "trim leading and trailing whitespace before comparison")
+	flag.IntVar(&numLines, "ln", -1, "select number of lines (default is -1 for all lines)")
 	flag.Parse()
 
 	fn := flag.Arg(0)
@@ -53,6 +55,7 @@ func main() {
 
 	// read the lines, append and output them if they're new
 	sc := bufio.NewScanner(os.Stdin)
+	lineCount := 0
 
 	for sc.Scan() {
 		line := sc.Text()
@@ -73,6 +76,11 @@ func main() {
 			if fn != "" {
 				fmt.Fprintf(f, "%s\n", line)
 			}
+		}
+
+		lineCount++
+		if numLines > 0 && lineCount >= numLines {
+			break
 		}
 	}
 }
