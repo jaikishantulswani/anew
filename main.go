@@ -5,8 +5,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
-	"bytes"
+	"time"
 )
 
 func main() {
@@ -27,74 +28,63 @@ func main() {
 
 	lines := make(map[string]bool)
 	var existingLines, newLines []string
+	var originalModTime time.Time
+	var fileModified bool
 
-	var originalContent bytes.Buffer
-
-	// Check if file exists
-	fileExists := false
 	if fn != "" {
-		if _, err := os.Stat(fn); err == nil {
-			fileExists = true
-		}
-	}
-
-	if fileExists {
-		// Read the whole file into a map if it exists
-		r, err := os.Open(fn)
+		// Check if the file exists and read it if it does
+		fileInfo, err := os.Stat(fn)
 		if err == nil {
-			sc := bufio.NewScanner(r)
+			originalModTime = fileInfo.ModTime()
 
-			for sc.Scan() {
-				line := sc.Text()
-				if trim {
-					line = strings.TrimSpace(line)
-				}
-				if line == "" {
-					continue // Skip blank lines
-				}
-				if !lines[line] {
-					lines[line] = true
-					existingLines = append(existingLines, line)
-					originalContent.WriteString(line + "\n")
-				}
-			}
-			r.Close()
+			r, err := os.Open(fn)
+			if err == nil {
+				sc := bufio.NewScanner(r)
 
-			if rewrite && !dryRun {
-				// Create a temporary file to avoid modifying the original file's timestamp
-				tmpFileName := fn + ".tmp"
-				f, err := os.OpenFile(tmpFileName, os.O_TRUNC|os.O_WRONLY|os.O_CREATE, 0644)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "failed to open temporary file for rewriting: %s\n", err)
-					return
+				for sc.Scan() {
+					line := sc.Text()
+					if trim {
+						line = strings.TrimSpace(line)
+					}
+					if line == "" {
+						continue // Skip blank lines
+					}
+					if !lines[line] {
+						lines[line] = true
+						existingLines = append(existingLines, line)
+					}
 				}
+				r.Close()
 
-				for _, line := range existingLines {
-					fmt.Fprintf(f, "%s\n", line)
-				}
-				f.Close()
+				if rewrite && !dryRun {
+					// Sort the lines before rewriting
+					sort.Strings(existingLines)
 
-				// Read the new content and compare
-				var newContent bytes.Buffer
-				for _, line := range existingLines {
-					newContent.WriteString(line + "\n")
-				}
-				for _, line := range newLines {
-					newContent.WriteString(line + "\n")
-				}
-
-				if !bytes.Equal(originalContent.Bytes(), newContent.Bytes()) {
-					// Replace the original file with the temporary file if there are changes
-					err = os.Rename(tmpFileName, fn)
+					// Rewrite the file with unique lines, removing blank lines
+					f, err := os.OpenFile(fn, os.O_TRUNC|os.O_WRONLY, 0644)
 					if err != nil {
-						fmt.Fprintf(os.Stderr, "failed to replace the original file: %s\n", err)
+						fmt.Fprintf(os.Stderr, "failed to open file for rewriting: %s\n", err)
 						return
 					}
-				} else {
-					// Clean up the temporary file if no changes
-					os.Remove(tmpFileName)
+					for _, line := range existingLines {
+						fmt.Fprintf(f, "%s\n", line)
+					}
+					f.Close()
+					fileModified = true
 				}
 			}
+		} else if os.IsNotExist(err) {
+			// Create the file if it does not exist
+			f, err := os.OpenFile(fn, os.O_CREATE|os.O_WRONLY, 0644)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "failed to create file: %s\n", err)
+				return
+			}
+			f.Close()
+			// Note: File will be created with empty content, so no need to read existing lines
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to stat file: %s\n", err)
+			return
 		}
 	}
 
@@ -129,16 +119,28 @@ func main() {
 	}
 
 	if !dryRun && fn != "" {
-		// Open file for appending new lines, create it if it doesn't exist
-		f, err := os.OpenFile(fn, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to open file for appending: %s\n", err)
-			return
-		}
-		defer f.Close()
+		if len(newLines) > 0 {
+			// Append new lines to the file if not in dry run mode
+			f, err := os.OpenFile(fn, os.O_APPEND|os.O_WRONLY, 0644)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "failed to open file for appending: %s\n", err)
+				return
+			}
+			defer f.Close()
 
-		for _, line := range newLines {
-			fmt.Fprintf(f, "%s\n", line)
+			for _, line := range newLines {
+				fmt.Fprintf(f, "%s\n", line)
+			}
+
+			fileModified = true
+		}
+
+		if fileModified {
+			// Update the file's modification time to the original time if any changes were made
+			err := os.Chtimes(fn, time.Now(), originalModTime)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "failed to restore file modification time: %s\n", err)
+			}
 		}
 	}
 }
